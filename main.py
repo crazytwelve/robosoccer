@@ -1,129 +1,79 @@
-# Import necessary modules
 import network
 import socket
 import time
-import random
-from machine import Pin
+from machine import Pin, PWM
 
 # Create an LED object on pin 'LED'
 led = Pin('LED', Pin.OUT)
-# Create four motor driver objects
-motor_a_forward = Pin(18, Pin.OUT)
-motor_a_backward = Pin(19, Pin.OUT)
-motor_b_forward = Pin(20, Pin.OUT)
-motor_b_backward = Pin(21, Pin.OUT)
+
+# Create PWM objects for motor control pins (for L298N motor driver)
+motor_a_forward = PWM(Pin(18))  # Left motor forward
+motor_a_backward = PWM(Pin(19))  # Left motor backward
+motor_b_forward = PWM(Pin(20))   # Right motor forward
+motor_b_backward = PWM(Pin(21))  # Right motor backward
+
+# Set PWM frequency (typical for motors)
+freq = 1000
+motor_a_forward.freq(freq)
+motor_a_backward.freq(freq)
+motor_b_forward.freq(freq)
+motor_b_backward.freq(freq)
+
+# Motor control function with differential steering
+def move_with_turn(direction="forward", speed=65535, turn_rate=0):
+    """
+    Control motors with differential steering for simultaneous forward/backward and turning.
+    - direction: 'forward' or 'backward'
+    - speed: Base speed from trigger input (0-65535)
+    - turn_rate: Turning factor from joystick (-32768 to 32768), negative for left, positive for right
+    """
+    if direction == "forward":
+        left_base = speed
+        right_base = speed
+        left_backward = 0
+        right_backward = 0
+    else:  # backward
+        left_base = 0
+        right_base = 0
+        left_backward = speed
+        right_backward = speed
+
+    # Adjust speeds for turning based on joystick input
+    if turn_rate > 0:  # Turning right: reduce left motor speed
+        turn_factor = turn_rate / 32768.0  # Normalize joystick input to 0-1
+        left_speed = int(left_base * (1 - turn_factor))
+        right_speed = right_base
+        left_back_speed = int(left_backward * (1 - turn_factor))
+        right_back_speed = right_backward
+    elif turn_rate < 0:  # Turning left: reduce right motor speed
+        turn_factor = abs(turn_rate) / 32768.0  # Normalize joystick input to 0-1
+        left_speed = left_base
+        right_speed = int(right_base * (1 - turn_factor))
+        left_back_speed = left_backward
+        right_back_speed = int(right_backward * (1 - turn_factor))
+    else:  # No turn
+        left_speed = left_base
+        right_speed = right_base
+        left_back_speed = left_backward
+        right_back_speed = right_backward
+
+    # Apply the calculated speeds to motors
+    motor_a_forward.duty_u16(left_speed)
+    motor_b_forward.duty_u16(right_speed)
+    motor_a_backward.duty_u16(left_back_speed)
+    motor_b_backward.duty_u16(right_back_speed)
+
+def move_stop():
+    motor_a_forward.duty_u16(0)
+    motor_b_forward.duty_u16(0)
+    motor_a_backward.duty_u16(0)
+    motor_b_backward.duty_u16(0)
+
+move_stop()  # Initialize motors to stop
 
 # Wi-Fi credentials
 ssid = 'robosoccer'
 password = 'iitmadras'
-
-def move_forward():
-    motor_a_forward.value(1)
-    motor_b_forward.value(1)
-    motor_a_backward.value(0)
-    motor_b_backward.value(0)
-
-def move_backward():
-    motor_a_forward.value(0)
-    motor_b_forward.value(0)
-    motor_a_backward.value(1)
-    motor_b_backward.value(1)
-
-def move_stop():
-    motor_a_forward.value(0)
-    motor_b_forward.value(0)
-    motor_a_backward.value(0)
-    motor_b_backward.value(0)
-    
-def move_left():
-    motor_a_forward.value(1)
-    motor_b_forward.value(0)
-    motor_a_backward.value(0)
-    motor_b_backward.value(1)
-
-def move_right():
-    motor_a_forward.value(0)
-    motor_b_forward.value(1)
-    motor_a_backward.value(1)
-    motor_b_backward.value(0)
-
-move_stop()
-
-# HTML template for the webpage
-def webpage(random_value, state):
-    html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Aditya Rao - Paradox'24 Workshop</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-        </head>
-        <body>
-            <h1>ROBOT WIFI CONTROL</h1>
-            
-            <table>
-            <tr>
-                <td>
-                    <form action="./lighton">
-                        <input type="submit" value="Light on" style="width:120px; height:120px;"/>
-                    </form>
-                </td>
-                <td>
-                    <form action="./lightoff">
-                        <input type="submit" value="Light off" style="width:120px; height:120px;"/>
-                    </form>
-                </td>
-            </tr>
-            </table>
-            <br />
-            <table>
-            <tr>
-                <td>
-                    <form action="./forward">
-                        <input type="submit" value="Forward" style="width:120px; height:120px;"/>
-                    </form>
-                </td>
-                <td>
-                    <form action="./backward">
-                        <input type="submit" value="Backward" style="width:120px; height:120px;"/>
-                    </form>
-                </td>
-            </tr>
-            <tr>
-                <td colspan=2>
-                <center>
-                    <form action="./stop">
-                        <input type="submit" value="Stop" style="width:120px; height:120px;"/>
-                    </form>
-                </center>
-                </td>
-            </tr>
-            <tr>
-                <td>
-                    <form action="./left">
-                        <input type="submit" value="Left" style="width:120px; height:120px;"/>
-                    </form>
-                </td>
-                <td>
-                    <form action="./right">
-                        <input type="submit" value="Right" style="width:120px; height:120px;"/>
-                    </form>
-                </td>
-            </tr>
-            </table>
-            <br />
-            
-            <p>Status: {state}</p>
-            <h2>Fetch a Random Number</h2>
-            <h3>Webserver Test<h3>
-            <form action="./value">
-                <input type="submit" value="Fetch value" style="width:120px; height:120px;"/>
-            </form>
-            <p>Fetched value: {random_value}</p>
-        </body>
-        </html>
-        """
-    return str(html)
 
 # Connect to WLAN
 wlan = network.WLAN(network.STA_IF)
@@ -158,7 +108,6 @@ print('Listening on', addr)
 
 # Initialize variables
 state = "OFF"
-random_value = 0
 
 # Main loop to listen for connections
 while True:
@@ -172,41 +121,60 @@ while True:
         print('Request content = %s' % request)
 
         try:
-            request = request.split()[1]
-            print('Request:', request)
+            request_path = request.split()[1]
+            print('Request:', request_path)
         except IndexError:
-            pass
-        
-        # Process the request and update variables
-        if request == '/lighton?':
-            print("LED on")
-            led.value(1)
-            state = "ON"
-        elif request == '/lightoff?':
-            led.value(0)
-            state = 'OFF'
-        elif request == '/forward?':
-            move_forward()
-            state = 'Forward'
-        elif request == '/backward?':
-            move_right()
-        elif request == '/stop?':
-            move_stop()
-            state = 'Stop'
-        elif request == '/left?':
-            move_left()
-            state = 'Left'
-        elif request == '/right?':
-            move_backward()
-            state = 'Right'
-        elif request == '/value?':
-            random_value = random.randint(10, 20)
+            request_path = ''
 
-        # Generate HTML response
-        response = webpage(random_value, state)  
+        # Process Xbox controller input via HTTP requests
+        # Expected format: /move?rt=val&lt=val&rx=val
+        # rt: Right Trigger (forward), lt: Left Trigger (backward), rx: Right Joystick X-axis (left/right)
+        if request_path.startswith('/move?'):
+            params = request_path[6:]  # Remove '/move?'
+            param_dict = {}
+            for param in params.split('&'):
+                if '=' in param:
+                    k, v = param.split('=')
+                    param_dict[k] = int(v)
+
+            rt_val = param_dict.get('rt', 0)  # Right Trigger for forward (0-65535)
+            lt_val = param_dict.get('lt', 0)  # Left Trigger for backward (0-65535)
+            rx_val = param_dict.get('rx', 0)  # Right Joystick X-axis (-32768 to 32768)
+
+            # Determine motor commands based on inputs
+            if rt_val > 0 and lt_val > 0:  # Both triggers pressed
+                move_stop()
+                state = "Stop (Both Triggers Pressed)"
+            elif rt_val > 0:  # Forward with possible turn
+                move_with_turn(direction="forward", speed=rt_val, turn_rate=rx_val)
+                state = f"Forward (Speed: {rt_val}, Turn: {rx_val})"
+            elif lt_val > 0:  # Backward with possible turn
+                move_with_turn(direction="backward", speed=lt_val, turn_rate=rx_val)
+                state = f"Backward (Speed: {lt_val}, Turn: {rx_val})"
+            elif rx_val > 10000:  # Right turn without forward/backward
+                move_with_turn(direction="forward", speed=65535 // 2, turn_rate=rx_val)
+                state = f"Right Turn (Rate: {rx_val})"
+            elif rx_val < -10000:  # Left turn without forward/backward
+                move_with_turn(direction="forward", speed=65535 // 2, turn_rate=rx_val)
+                state = f"Left Turn (Rate: {rx_val})"
+            else:
+                move_stop()
+                state = "Stop"
+
+            response = f"Motor command executed: {state}"
+        elif request_path == '/lighton?':
+            led.value(1)
+            state = "LED ON"
+            response = "LED turned on"
+        elif request_path == '/lightoff?':
+            led.value(0)
+            state = "LED OFF"
+            response = "LED turned off"
+        else:
+            response = "Invalid command"
 
         # Send the HTTP response and close the connection
-        conn.send('HTTP/1.0 200 OK\r\nContent-type: text/html\r\n\r\n')
+        conn.send('HTTP/1.0 200 OK\r\nContent-type: text/plain\r\n\r\n')
         conn.send(response)
         conn.close()
 
